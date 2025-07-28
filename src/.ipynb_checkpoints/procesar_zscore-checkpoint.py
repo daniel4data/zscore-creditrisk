@@ -1,7 +1,6 @@
 # ====================== LIBRERÍAS ====================== #
 import pandas as pd
 
-
 # ====================== FUNCIONES ====================== #
 
 # --------------------------------------------------------
@@ -10,90 +9,62 @@ import pandas as pd
 # combinando código IQ, año fiscal (FY202X o LFY) y nombre legible.
 # --------------------------------------------------------
 
-def construir_nombre_col(col, header_0, header_1, header_2, year):
-    nombre_legible = header_0[col]  # Ej: "Total Revenue"
-    cod = header_1[col]             # Ej: "IQ_TOTAL_REV"
-    year_raw = header_2[col]        # Ej: "FY2022", "Latest Fiscal Year", o vacío
+def construir_nombre_col(col_idx, header_0, header_1, header_2, year):
+    cod_iq = str(header_1[col_idx]).strip()
+    anio = str(header_2[col_idx]).strip()
 
-    # Normalizamos el año para construir nombres trazables
-    if pd.notna(year_raw) and str(year_raw).startswith("FY"):
-        year_final = str(year_raw).replace("FY", "")
-    elif str(year_raw).strip() == "Latest Fiscal Year":
-        year_final = "LFY"  # Le damos un identificador único
+    if cod_iq.startswith("SP_"):
+        return cod_iq
+    elif cod_iq.startswith("IQ_") and cod_iq != "nan":
+        if anio != "nan" and anio != "":
+            return f"{cod_iq}_{anio}"
+        else:
+            return f"{cod_iq}_{year}"  # SIEMPRE lleva el año
     else:
-        year_final = str(year)  # Backup: usamos el año pasado como argumento
-
-    # Lógica de construcción del nombre según los casos
-    if pd.notna(cod) and year_final:
-        return f"{cod}_{year_final}"  # Ej: IQ_TOTAL_REV_2022
-
-    elif pd.notna(cod):
-        return str(cod)  # Ej: IQ_ENTITY_ID, sin año porque no varía
-
-    elif pd.notna(nombre_legible):
-        return str(nombre_legible).strip()  # Si no hay código IQ pero sí nombre legible
-
-    else:
-        return f"col_{col}"  # Último recurso: nombre genérico
+        return f"UNKNOWN_{col_idx}"
 
 # --------------------------------------------------------
 # Función: procesar_archivo
 # Objetivo: transformar el CSV de Capital IQ en un DataFrame limpio
 # Acciones:
 # - Extrae encabezados (3 primeras filas)
-# - Aplica `construir_nombre_col` a cada columna
+# - Aplica construir_nombre_col a cada columna
 # - Detecta y renombra duplicados (_dup1, _dup2, ...)
 # - Agrega columna "year"
 # --------------------------------------------------------
 
-def procesar_archivo(file_path, year):
-    # Cargamos el CSV completo sin encabezado
-    df_raw = pd.read_csv(file_path, header=None, low_memory=False)
+def procesar_archivo(file_path, year, header_row=14):
+    import pandas as pd
 
-    # Extraemos los encabezados reales de la estructura CIQ
-    header_0 = df_raw.iloc[0]  # Nombre legible (ej: "Total Revenue")
-    header_1 = df_raw.iloc[1]  # Código IQ (ej: "IQ_TOTAL_REV")
-    header_2 = df_raw.iloc[2]  # Año fiscal o etiqueta dinámica (ej: "FY2022")
+    # Leer encabezados IQ (línea 14)
+    with open(file_path) as f:
+        for _ in range(header_row):
+            next(f)
+        header_1 = [col.strip().replace('"', '') for col in next(f).strip().split(",")]
 
-    # Renombramos columnas asegurando unicidad
-    nuevas_columnas = []
-    seen = {}
+    # Leer los datos reales (línea 15 en adelante)
+    df = pd.read_csv(file_path, header=None, skiprows=header_row+1)
+    df.columns = header_1
 
-    for col in df_raw.columns:
-        nombre = construir_nombre_col(col, header_0, header_1, header_2, year)
-        if nombre in seen:
-            seen[nombre] += 1
-            nombre = f"{nombre}_dup{seen[nombre]}"
-        else:
-            seen[nombre] = 0
-        nuevas_columnas.append(nombre)
+    # Renombrar columnas con año, excepto las columnas estáticas
+    cols_rename = {}
+    for col in df.columns:
+        if col.startswith("IQ_") and col not in ['IQ_INDUSTRY_CLASSIFICATION']:
+            cols_rename[col] = f"{col}_{year}"
+    df = df.rename(columns=cols_rename)
 
-    # Eliminamos las 4 primeras filas (encabezados + metadatos)
-    df_limpio = df_raw[4:].copy()
-    df_limpio.columns = nuevas_columnas
-    df_limpio.reset_index(drop=True, inplace=True)
+    # Agrega la columna de año
+    df['year'] = year
 
-    # Agregamos columna explícita del año
-    df_limpio["year"] = year
+    # Limpieza opcional de nombre de entidad
+    if "SP_ENTITY_NAME" in df.columns:
+        df["SP_ENTITY_NAME"] = df["SP_ENTITY_NAME"].astype(str).str.replace('""', '"').str.replace(r'^"|"$', '', regex=True).str.strip()
 
-    # Limpieza del nombre de entidad si existe
-    col_entity = [col for col in df_limpio.columns if "ENTITY_NAME" in col.upper()]
-    if col_entity:
-        col_name = col_entity[0]
-        df_limpio[col_name] = (
-        df_limpio[col_name]
-        .astype(str)
-        .str.replace('""', '"', regex=False)
-        .str.replace(r'^"|"$', '', regex=True)  # quita comillas solo al inicio o final
-        .str.strip()
-    )
-
-    else:
-        print(f"⚠️ {year}: No se encontró columna de nombre de entidad.")
-    
-    print(f"Columnas disponibles en {year}: {df_limpio.columns.tolist()}")
-
-    return df_limpio
+    # Conversión de columnas numéricas
+    for col in df.columns:
+        if col.startswith("IQ_") and col not in ['IQ_INDUSTRY_CLASSIFICATION']:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
 
 # --------------------------------------------------------
 # Función: transformar_a_formato_largo
@@ -136,3 +107,48 @@ def transformar_a_formato_largo(df_panel):
     # Unimos todos los años
     df_final = pd.concat(panel_largo, ignore_index=True)
     return df_final
+
+# --------------------------------------------------------
+# Función: validar_estructura
+# Objetivo: verificar que todos los DataFrames anuales tienen 
+# las mismas columnas (estructura homogénea)
+# - Compara columnas del año base con el resto
+# - Imprime diferencias si las hay
+# --------------------------------------------------------
+
+def validar_estructura(dfs, base_year=2019):
+    base_cols = set(dfs[0].columns)
+    for i, df in enumerate(dfs[1:], 1):
+        diff = set(df.columns).symmetric_difference(base_cols)
+        if diff:
+            print(f"⚠️ Año {base_year + i}: columnas diferentes: {sorted(diff)}")
+        else:
+            print(f"✅ Año {base_year + i}: columnas consistentes")
+
+from scipy.stats import zscore
+
+# --------------------------------------------------------
+# Función: detectar_outliers_zscore
+# Objetivo: detectar outliers en una columna numérica mediante Z-score
+# - Convierte la columna a float
+# - Calcula el Z-score (ignora NaNs)
+# - Devuelve solo las filas con |z| > threshold
+# --------------------------------------------------------
+
+def detectar_outliers_zscore(df, columna, threshold=3):
+    """
+    Detecta outliers en una columna numérica usando Z-score.
+    
+    Parámetros:
+    - df: DataFrame de entrada
+    - columna: nombre de la columna numérica
+    - threshold: valor absoluto del Z-score a partir del cual se considera outlier (default: 3)
+
+    Retorna:
+    - DataFrame con solo las filas que son outliers
+    """
+    df = df.copy()
+    z = zscore(df[columna].astype(float), nan_policy='omit')
+    df["z"] = z
+    return df[df["z"].abs() > threshold]
+
