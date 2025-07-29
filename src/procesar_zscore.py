@@ -152,3 +152,130 @@ def detectar_outliers_zscore(df, columna, threshold=3):
     df["z"] = z
     return df[df["z"].abs() > threshold]
 
+# --------------------------------------------------------
+# Función: limpiar_columna_numerica
+# Objetivo:
+# Limpia columnas numéricas que fueron importadas como texto
+# con símbolos contables, comas o valores no numéricos comunes.
+# - Convierte (1,234) → -1234
+# - Elimina comas y espacios
+# - Reemplaza 'NM', 'NA', '--', 'n/a', etc. por NaN
+# - Devuelve una columna numérica (float) lista para análisis
+# --------------------------------------------------------
+
+def limpiar_columna_numerica(col):
+    col_limpia = (
+        col.astype(str)
+           .str.replace(",", "", regex=False)
+           .str.replace("(", "-", regex=False)
+           .str.replace(")", "", regex=False)
+           .str.replace(r"\b(NM|NA|--|n/a|N/A)\b", "", regex=True)
+           .str.strip()
+    )
+    return pd.to_numeric(col_limpia.replace("", np.nan), errors="coerce")
+
+# --------------------------------------------------------
+# Función: calcular_ratios_zlogit
+# Objetivo:
+# Calcula los cinco ratios X1 a X5 del modelo Z-Logit de Altman (2016),
+# utilizando columnas financieras limpias y estandarizadas.
+#
+# X1 = (Activo Circulante - Pasivo Circulante) / Activo Total
+# X2 = Utilidades Retenidas / Activo Total
+# X3 = EBIT / Activo Total
+# X4 = Valor de Mercado del Capital / Pasivo Total
+# X5 = Ingresos Totales / Activo Total
+# --------------------------------------------------------
+
+def calcular_ratios_zlogit(df):
+    df = df.copy()
+    eps = 1e-6  # Para evitar división entre cero
+
+    # X1: Working Capital / Total Assets
+    df["X1"] = (df["IQ_TOTAL_CA"] - df["IQ_TOTAL_CL"]) / (df["IQ_TOTAL_ASSETS"] + eps)
+
+    # X2: Retained Earnings / Total Assets
+    df["X2"] = df["IQ_RETAINED_EARNINGS"] / (df["IQ_TOTAL_ASSETS"] + eps)
+
+    # X3: EBIT / Total Assets
+    df["X3"] = df["IQ_EBIT"] / (df["IQ_TOTAL_ASSETS"] + eps)
+
+    # X4: Market Value of Equity / Total Liabilities
+    df["MARKET_VALUE_EQUITY"] = df["SP_PRICE_CLOSE"] * df["IQ_AVG_BASIC_SHARES_OUT"]
+    df["X4"] = df["MARKET_VALUE_EQUITY"] / (df["IQ_TOTAL_LIAB"] + eps)
+
+    # X5: Revenue / Total Assets
+    df["X5"] = df["IQ_TOTAL_REV"] / (df["IQ_TOTAL_ASSETS"] + eps)
+
+    return df
+
+# --------------------------------------------------------
+# Función: winsorize_iqr
+# Objetivo: Aplicar winsorización a una columna numérica 
+# según el método del rango intercuartílico (IQR) con k=2.5.
+# Esto limita valores extremos para evitar distorsión 
+# en el modelo sin eliminar observaciones.
+# --------------------------------------------------------
+
+def winsorize_iqr(df, col, k=2.5):
+    """
+    Winsoriza los valores de una columna numérica según el método IQR:
+    - Límite inferior = Q1 - k * IQR
+    - Límite superior = Q3 + k * IQR
+    Reemplaza valores fuera de esos límites con los límites mismos.
+    """
+    q1 = df[col].quantile(0.25)
+    q3 = df[col].quantile(0.75)
+    iqr = q3 - q1
+    lower = q1 - k * iqr
+    upper = q3 + k * iqr
+    df[col] = df[col].clip(lower, upper)
+    print(f"{col}: Winsorizado entre {lower:.3f} y {upper:.3f}")
+    return df
+
+# --------------------------------------------------------
+# Función: winsorize_percentiles
+# Objetivo: Aplicar winsorización a una columna numérica
+# entre percentiles específicos (por defecto 1% y 99%). 
+# Ideal para variables con alta asimetría como X4.
+# --------------------------------------------------------
+
+def winsorize_percentiles(df, col, lower_pct=0.01, upper_pct=0.99):
+    lower = df[col].quantile(lower_pct)
+    upper = df[col].quantile(upper_pct)
+    df.loc[:, col] = df[col].clip(lower, upper)
+    print(f"{col}: Winsorizado entre p{int(lower_pct*100)} = {lower:.3f} y p{int(upper_pct*100)} = {upper:.3f}")
+    return df
+
+# --------------------------------------------------------
+# Función: calcular_is_distressed
+# Objetivo: Generar una variable binaria que actúe como 
+# proxy de quiebra financiera ('is_distressed'), con base 
+# en múltiples señales contables y financieras graves.
+# Se clasifica como 'distressed' si cumple ≥ 2 criterios.
+# --------------------------------------------------------
+
+def calcular_is_distressed(df):
+    """
+    Calcula una variable binaria proxy de distress financiero (1 = empresa en problemas) usando señales contables.
+
+    Reglas:
+    - Patrimonio neto negativo
+    - EBIT / Activos < -0.5
+    - Retained Earnings / Activos < -1
+    - Capital de trabajo / Activos < -0.2
+    - Deuda total / Activos > 1
+    - Intereses > EBIT (si EBIT < 0)
+
+    Devuelve una columna nueva: is_distressed (0 o 1).
+    """
+
+    score = 0
+    score += (df["IQ_TOTAL_LIAB"] > df["IQ_TOTAL_ASSETS"]).astype(int)
+    score += (df["IQ_EBIT"] / df["IQ_TOTAL_ASSETS"] < -0.5).astype(int)
+    score += (df["IQ_RETAINED_EARNINGS"] / df["IQ_TOTAL_ASSETS"] < -1.0).astype(int)
+    score += ((df["IQ_TOTAL_CA"] - df["IQ_TOTAL_CL"]) / df["IQ_TOTAL_ASSETS"] < -0.2).astype(int)
+    score += (df["IQ_TOTAL_DEBT"] / df["IQ_TOTAL_ASSETS"] > 1.0).astype(int)
+    score += ((df["IQ_INTEREST_EXP"] > df["IQ_EBIT"]) & (df["IQ_EBIT"] < 0)).astype(int)
+
+    return (score >= 2).astype(int)
