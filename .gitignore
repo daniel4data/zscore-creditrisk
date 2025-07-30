@@ -1,4 +1,43 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.ipynb_checkpoints/
-.env/
-*.csv
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Distribution / packaging
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# Data files / outputs
+data/
+original_xlsx/
+*.xlsx
+*.xls
+outputs/*.csv
+outputs/*.pkl
+outputs/figures/
+outputs/*.png
+outputs/*.pdf
+
+# Sensitive information
+*.env
+*.key
+*.pem
+
+# VSCode
+.vscode/
+.settings/
+
+# OS generated files
+.DS_Store
+Thumbs.db
