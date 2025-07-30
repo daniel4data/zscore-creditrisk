@@ -1,89 +1,107 @@
 # 📊 Z-Score Credit Risk Modeling
 
-Este proyecto construye una base de datos longitudinal limpia a partir de información financiera histórica (2019–2023) extraída de **S&P Capital IQ Pro**, con el objetivo de evaluar el riesgo de quiebra empresarial utilizando modelos clásicos de **Z-Score** y extensiones como **Z-Logit** (regresión logística).
+Proyecto para **evaluación avanzada de riesgo de quiebra empresarial** mediante modelos clásicos de **Z-Score** y su extensión moderna **Z-Logit** (regresión logística), utilizando información financiera histórica de empresas globales (2019–2023) extraída de **S&P Capital IQ Pro**.
 
 ---
 
 ## 🎯 Objetivo
 
-Desarrollar una muestra robusta, trazable y reproducible que sirva como insumo para modelos de riesgo crediticio aplicables a clientes reales, considerando tanto empresas públicas como privadas.
+Desarrollar un pipeline reproducible y trazable para modelar el **riesgo crediticio corporativo**, generando un scoring robusto y defendible, útil para consultoría financiera, pricing de deuda, benchmarking y análisis de portafolios de crédito.
 
 ---
 
-## 📁 Estructura del proyecto
+## 🗂️ Estructura del proyecto
 
 zscore-creditrisk/
-├── data/ # Archivos originales .csv por año (sin encabezados limpios)
+├── data/ # CSVs originales (por año, sin encabezados limpios)
 ├── notebooks/
-│ ├── exploracion_zscore.ipynb # Exploración, validación y cálculos
+│ ├── exploracion_zscore.ipynb # Notebook principal de procesamiento y modelado
+│ └── exploracion_zscore_segmentos.ipynb # (Opcional) Análisis por segmento/industria
 │ └── archivos_antiguos/ # Notebooks de trabajo previos
-├── outputs/ # Resultados intermedios (e.g., panel limpio en formato largo)
+├── outputs/ # Resultados intermedios y finales (panel limpio, modelos, figuras)
+│ └── figures/ # Gráficas generadas (exploratorias y de resultados)
 ├── src/
-│ └── procesar_zscore.py # Funciones reutilizables para limpieza y transformación
-├── original_xlsx/ # Archivos Excel originales descargados desde CIQ
+│ └── procesar_zscore.py # Funciones modulares de limpieza y procesamiento
+├── original_xlsx/ # Archivos .xlsx originales descargados desde CIQ
 ├── .gitignore # Exclusión de archivos sensibles/pesados
 └── README.md # Documentación del proyecto
 
+
 ---
 
-## ⚙️ Procesamiento de datos
+## ⚙️ Flujo de procesamiento y modelado
 
-1. **Carga de archivos .xlsx sin encabezados** desde Capital IQ Pro.
-2. **Renombrado de columnas** con claves IQ + año fiscal.
-3. **Conversión de texto a numérico**, manejo de paréntesis contables y etiquetas no numéricas.
-4. **Transformación a formato panel largo** (una fila por empresa-año).
-5. **Cálculo de ratios financieros clave** para modelos Z-Score:
+1. **Carga de archivos .xlsx** desde Capital IQ Pro.
+2. **Limpieza y renombrado de columnas**: claves IQ + año fiscal.
+3. **Conversión de texto a numérico**, manejo de formatos contables y etiquetas no numéricas.
+4. **Transformación a formato panel longitudinal** (una fila por empresa-año).
+5. **Cálculo de ratios financieros clave** para modelos Z-Score (X1–X5):
 
-   - `X1 = Working Capital / Total Assets`
-   - `X2 = Retained Earnings / Total Assets`
-   - `X3 = EBIT / Total Assets`
-   - `X4 = Market Value of Equity / Total Liabilities`
-   - `X5 = Sales / Total Assets`
+   - X1: Working Capital / Total Assets
+   - X2: Retained Earnings / Total Assets
+   - X3: EBIT / Total Assets
+   - X4: Market Value of Equity / Total Liabilities
+   - X5: Revenue / Total Assets
 
 6. **Winsorización de outliers extremos**:
-   - `X1` a `X3` y `X5`: método IQR
-   - `X4`: percentiles (p1, p99)
+   - X1, X2, X3, X5: método IQR
+   - X4: percentiles (p1, p99)
 
-7. **Construcción de variable binaria `is_distressed`** como proxy de quiebra, basada en múltiples señales financieras (lógica replicable inspirada en Altman, 2016 y Barboza, 2017).
+7. **Construcción de variable binaria `is_distressed`** como proxy de quiebra, basada en señales financieras graves (criterios replicables según Altman, 2016 y Barboza, 2017).
 
 ---
 
 ## 📦 Dataset final
 
-- Archivo limpio para modelado: `outputs/zscore_base_modelo.csv`
-- Observaciones válidas para entrenamiento: **31,361**
-- Periodo cubierto: **2019–2023**
-- Empresas públicas y privadas de todo el mundo
-- Variables: financieros estandarizados, ratios Z-Score, bandera de distress (`is_distressed`)
+- **Archivo principal para modelado:** `outputs/zscore_base_modelo.csv`
+- **Observaciones válidas para entrenamiento:** 31,361
+- **Periodo cubierto:** 2019–2023
+- **Cobertura:** Empresas públicas y privadas, multisectoriales y multinacionales
+- **Variables:** Ratios financieros estandarizados, bandera de distress (`is_distressed`), metadatos clave (país, industria, año, tipo de empresa)
 
 ---
 
-## 🔍 Variable objetivo: `is_distressed`
+## 🔍 Variable objetivo: `is_distressed` (proxy de quiebra)
 
-Como la base no incluye una columna explícita de quiebra, se construyó una variable binaria utilizando criterios financieros severos.  
-Cada condición suma 1 punto:
+Como la base no incluye una columna explícita de default, se construyó una variable binaria basada en múltiples señales financieras graves. Cada condición suma 1 punto:
 
-- Patrimonio contable negativo → `Total Liabilities > Total Assets`
-- EBIT / Activos < -0.5
-- Retained Earnings / Activos < -1.0
-- Working Capital / Activos < -0.2
-- Deuda Total / Activos > 1.0
-- Intereses > EBIT
+- **Patrimonio neto negativo:** `Total Liabilities > Total Assets`
+- **EBIT / Activos < -0.5**
+- **Retained Earnings / Activos < -1.0**
+- **Working Capital / Activos < -0.2**
+- **Deuda Total / Activos > 1.0**
+- **Intereses > EBIT** (si EBIT < 0)
 
-**Regla final**:  
+**Regla de clasificación:**  
 Si se cumplen **2 o más condiciones**, entonces `is_distressed = 1`; en caso contrario, `is_distressed = 0`.
 
-Esta estrategia ha sido validada empíricamente y genera una proporción razonable de empresas en distress (~9%).
+Esta estrategia ha sido validada empíricamente y genera una proporción razonable de empresas en distress (~9% del total).
 
 ---
 
-## 📊 Próximos pasos
+## 🧠 Modelado y validación
 
-- Estimar modelo clásico Z-Score (versión lineal de Altman).
-- Entrenar modelo Z-Logit con regresión logística.
-- Evaluar performance (precisión, recall, ROC, etc.).
-- Aplicar modelo a nuevas empresas o periodos posteriores.
-- Documentar findings y preparar entregables para consultoría.
+- **Modelos implementados:**  
+  - Z-Score clásico (Altman, versión lineal)
+  - Z-Logit (regresión logística binaria)
+- **Evaluación de desempeño:**  
+  - Precisión, recall, f1-score, curva ROC, AUC-ROC
+  - Validación cruzada (5 folds) y análisis de estabilidad
+- **Exportación de modelos y resultados:**  
+  - Modelos guardados (`.pkl`), probabilidades de distress, clases y categorías de riesgo para cada empresa
+- **Análisis segmentado:**  
+  - Diagnóstico visual y estadístico de probabilidades de distress por industria, país, tipo de empresa (opcional)
+  - Sugerencias para ajustar umbrales de riesgo y criterios de interpretación por segmento
+
+---
+
+## 📈 Próximos pasos y recomendaciones
+
+- Ajustar umbrales de clasificación según percentiles internos por industria o país (evitar cortes universales).
+- Incorporar equivalencias a ratings S&P/Moody's usando benchmarks recientes (Altman 2019).
+- Aplicar y comparar con “Synthetic Rating/ICR” (Damodaran) para empresas privadas.
+- Automatizar el pipeline para scoring masivo de nuevas empresas o portafolios.
+- Documentar limitaciones, recomendaciones y posibles mejoras para futuras versiones.
 
 ---
 
@@ -91,6 +109,15 @@ Esta estrategia ha sido validada empíricamente y genera una proporción razonab
 
 **Daniel Capitán Lobato**  
 [GitHub @daniel4data](https://github.com/daniel4data)  
-Proyecto personal desarrollado para uso profesional interno en **Élan Zaak, S.C.**
+Proyecto profesional desarrollado para uso interno y consultoría en **Élan Zaak, S.C.**  
+Contacto: danielcapitanlobato [at] gmail [dot] com
+
+---
+
+## 🏷️ Referencias clave
+
+- Altman, E. I. (2016, 2019). “Z-Score Models and Their Applications: A Review.”  
+- Barboza, F., Kimura, H., & Altman, E. I. (2017). “Machine learning models and bankruptcy prediction.”
+- Damodaran, A. (2023). “Synthetic Ratings & Default Spreads by Country.”
 
 ---
