@@ -1,15 +1,22 @@
-# ====================== LIBRERÍAS ====================== #
-import pandas as pd
-
-# ====================== FUNCIONES ====================== #
-
 # --------------------------------------------------------
-# Función: construir_nombre_col
-# Objetivo: generar nombres únicos y consistentes para las columnas,
-# combinando código IQ, año fiscal (FY202X o LFY) y nombre legible.
+# Function: construir_nombre_col
+# Purpose:
+# Generate unique, consistent column names combining IQ code, fiscal year and readable label.
+# Handles both static and annual columns.
 # --------------------------------------------------------
 
 def construir_nombre_col(col_idx, header_0, header_1, header_2, year):
+    """
+    Generate consistent column names for Capital IQ files.
+
+    Parameters:
+        col_idx (int): Column index.
+        header_0, header_1, header_2 (list): Header rows.
+        year (int or str): Fiscal year.
+
+    Returns:
+        str: Unique column name.
+    """
     cod_iq = str(header_1[col_idx]).strip()
     anio = str(header_2[col_idx]).strip()
 
@@ -19,151 +26,186 @@ def construir_nombre_col(col_idx, header_0, header_1, header_2, year):
         if anio != "nan" and anio != "":
             return f"{cod_iq}_{anio}"
         else:
-            return f"{cod_iq}_{year}"  # SIEMPRE lleva el año
+            return f"{cod_iq}_{year}"  # Always attach year for IQ columns
     else:
         return f"UNKNOWN_{col_idx}"
 
 # --------------------------------------------------------
-# Función: procesar_archivo
-# Objetivo: transformar el CSV de Capital IQ en un DataFrame limpio
-# Acciones:
-# - Extrae encabezados (3 primeras filas)
-# - Aplica construir_nombre_col a cada columna
-# - Detecta y renombra duplicados (_dup1, _dup2, ...)
-# - Agrega columna "year"
+# Function: procesar_archivo
+# Purpose:
+# Transform Capital IQ CSV into a clean DataFrame.
+# - Extract headers and build unique names
+# - Rename duplicates
+# - Add year column
+# - Clean entity names and convert numerics
 # --------------------------------------------------------
 
 def procesar_archivo(file_path, year, header_row=14):
-    import pandas as pd
+    """
+    Process a Capital IQ export file into a clean DataFrame.
 
-    # Leer encabezados IQ (línea 14)
+    Parameters:
+        file_path (str): Path to the CSV file.
+        year (int or str): Fiscal year.
+        header_row (int): Row number of the main header.
+
+    Returns:
+        pd.DataFrame: Cleaned and formatted DataFrame.
+    """
     with open(file_path) as f:
         for _ in range(header_row):
             next(f)
         header_1 = [col.strip().replace('"', '') for col in next(f).strip().split(",")]
 
-    # Leer los datos reales (línea 15 en adelante)
     df = pd.read_csv(file_path, header=None, skiprows=header_row+1)
     df.columns = header_1
 
-    # Renombrar columnas con año, excepto las columnas estáticas
     cols_rename = {}
     for col in df.columns:
         if col.startswith("IQ_") and col not in ['IQ_INDUSTRY_CLASSIFICATION']:
             cols_rename[col] = f"{col}_{year}"
     df = df.rename(columns=cols_rename)
 
-    # Agrega la columna de año
     df['year'] = year
 
-    # Limpieza opcional de nombre de entidad
     if "SP_ENTITY_NAME" in df.columns:
-        df["SP_ENTITY_NAME"] = df["SP_ENTITY_NAME"].astype(str).str.replace('""', '"').str.replace(r'^"|"$', '', regex=True).str.strip()
+        df["SP_ENTITY_NAME"] = (
+            df["SP_ENTITY_NAME"].astype(str)
+            .str.replace('""', '"')
+            .str.replace(r'^"|"$', '', regex=True)
+            .str.strip()
+        )
 
-    # Conversión de columnas numéricas
     for col in df.columns:
         if col.startswith("IQ_") and col not in ['IQ_INDUSTRY_CLASSIFICATION']:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
 # --------------------------------------------------------
-# Función: transformar_a_formato_largo
-# Objetivo: convertir columnas anuales en un panel tipo largo
-# - Detecta columnas con sufijos de año (_2020, _2021, ...)
-# - Renombra quitando el sufijo
-# - Agrega columna "year"
+# Function: transformar_a_formato_largo
+# Purpose:
+# Convert wide-format DataFrame to long panel, one row per year-entity.
+# Useful for multi-year S&P/Capital IQ data.
 # --------------------------------------------------------
 
 def transformar_a_formato_largo(df_panel):
+    """
+    Convert wide panel to long format by extracting year-suffix columns.
+
+    Parameters:
+        df_panel (pd.DataFrame): Wide format DataFrame.
+
+    Returns:
+        pd.DataFrame: Long-format panel.
+    """
     import re
 
-    # Detectamos los años presentes en los nombres de columnas (e.g., _2021)
     years_detected = sorted({
         re.search(r'_(\d{4})$', col).group(1)
         for col in df_panel.columns if re.search(r'_(\d{4})$', col)
     })
 
     panel_largo = []
-
     for year in years_detected:
-        # Columnas específicas de ese año
         cols_year = [col for col in df_panel.columns if col.endswith(f"_{year}")]
         cols_base = [re.sub(f"_{year}$", "", col) for col in cols_year]
-
-        # Columnas que no cambian por año (ej. ID, país, tipo empresa)
         cols_static = [col for col in df_panel.columns if not re.search(r'_\d{4}$', col)]
-
-        # Construimos DataFrame del año
         df_tmp = df_panel[cols_static + cols_year].copy()
-
-        # Eliminamos filas vacías solo si todas las columnas anuales están vacías
         df_tmp.dropna(subset=cols_year, how='all', inplace=True)
-
         df_tmp.rename(columns=dict(zip(cols_year, cols_base)), inplace=True)
         df_tmp["year"] = int(year)
-
         panel_largo.append(df_tmp)
-
-    # Unimos todos los años
     df_final = pd.concat(panel_largo, ignore_index=True)
     return df_final
 
 # --------------------------------------------------------
-# Función: validar_estructura
-# Objetivo: verificar que todos los DataFrames anuales tienen 
-# las mismas columnas (estructura homogénea)
-# - Compara columnas del año base con el resto
-# - Imprime diferencias si las hay
+# Function: filtrar_no_financieras
+# Purpose:
+# Exclude financial sector firms from the DataFrame (e.g., for Z-Score).
+# --------------------------------------------------------
+
+def filtrar_no_financieras(df, col_industria='IQ_INDUSTRY_CLASSIFICATION'):
+    """
+    Remove financial sector companies from the DataFrame.
+
+    Parameters:
+        df (pd.DataFrame): Input DataFrame.
+        col_industria (str): Name of the industry column.
+
+    Returns:
+        pd.DataFrame: Filtered DataFrame (non-financials only).
+    """
+    financial_codes = ["Financials"]
+    return df[~df[col_industria].str.strip().isin(financial_codes)].copy()
+
+# --------------------------------------------------------
+# Function: validar_estructura
+# Purpose:
+# Check that all annual DataFrames have the same columns.
+# Prints differences to help debugging.
 # --------------------------------------------------------
 
 def validar_estructura(dfs, base_year=2019):
+    """
+    Check that all DataFrames have the same column structure.
+
+    Parameters:
+        dfs (list of pd.DataFrame): List of DataFrames (one per year).
+        base_year (int): The base year (for reporting).
+
+    Returns:
+        None. Prints inconsistencies.
+    """
     base_cols = set(dfs[0].columns)
     for i, df in enumerate(dfs[1:], 1):
         diff = set(df.columns).symmetric_difference(base_cols)
         if diff:
-            print(f"⚠️ Año {base_year + i}: columnas diferentes: {sorted(diff)}")
+            print(f"⚠️ Year {base_year + i}: different columns: {sorted(diff)}")
         else:
-            print(f"✅ Año {base_year + i}: columnas consistentes")
+            print(f"✅ Year {base_year + i}: consistent columns")
+
+# --------------------------------------------------------
+# Function: detect_outliers_zscore
+# Purpose:
+# Detect outliers in a numeric column using Z-score method.
+# --------------------------------------------------------
 
 from scipy.stats import zscore
 
-# --------------------------------------------------------
-# Función: detectar_outliers_zscore
-# Objetivo: detectar outliers en una columna numérica mediante Z-score
-# - Convierte la columna a float
-# - Calcula el Z-score (ignora NaNs)
-# - Devuelve solo las filas con |z| > threshold
-# --------------------------------------------------------
-
-def detectar_outliers_zscore(df, columna, threshold=3):
+def detect_outliers_zscore(df, column, threshold=3):
     """
-    Detecta outliers en una columna numérica usando Z-score.
-    
-    Parámetros:
-    - df: DataFrame de entrada
-    - columna: nombre de la columna numérica
-    - threshold: valor absoluto del Z-score a partir del cual se considera outlier (default: 3)
+    Detect outliers in a numeric column using Z-score.
 
-    Retorna:
-    - DataFrame con solo las filas que son outliers
+    Parameters:
+        df (pd.DataFrame): DataFrame.
+        column (str): Numeric column name.
+        threshold (float): Z-score cutoff (default: 3).
+
+    Returns:
+        pd.DataFrame: Only rows where |z| > threshold.
     """
     df = df.copy()
-    z = zscore(df[columna].astype(float), nan_policy='omit')
+    z = zscore(df[column].astype(float), nan_policy='omit')
     df["z"] = z
     return df[df["z"].abs() > threshold]
 
 # --------------------------------------------------------
-# Función: limpiar_columna_numerica
-# Objetivo:
-# Limpia columnas numéricas que fueron importadas como texto
-# con símbolos contables, comas o valores no numéricos comunes.
-# - Convierte (1,234) → -1234
-# - Elimina comas y espacios
-# - Reemplaza 'NM', 'NA', '--', 'n/a', etc. por NaN
-# - Devuelve una columna numérica (float) lista para análisis
+# Function: limpiar_columna_numerica
+# Purpose:
+# Clean text-formatted numeric columns (remove commas, signs, NA, etc.)
+# Converts to float for analysis.
 # --------------------------------------------------------
 
 def limpiar_columna_numerica(col):
+    """
+    Clean up numeric columns imported as text.
+
+    Parameters:
+        col (pd.Series): Column with possible symbols or bad data.
+
+    Returns:
+        pd.Series: Numeric (float) column.
+    """
     col_limpia = (
         col.astype(str)
            .str.replace(",", "", regex=False)
@@ -175,54 +217,50 @@ def limpiar_columna_numerica(col):
     return pd.to_numeric(col_limpia.replace("", np.nan), errors="coerce")
 
 # --------------------------------------------------------
-# Función: calcular_ratios_zlogit
-# Objetivo:
-# Calcula los cinco ratios X1 a X5 del modelo Z-Logit de Altman (2016),
-# utilizando columnas financieras limpias y estandarizadas.
-#
-# X1 = (Activo Circulante - Pasivo Circulante) / Activo Total
-# X2 = Utilidades Retenidas / Activo Total
-# X3 = EBIT / Activo Total
-# X4 = Valor de Mercado del Capital / Pasivo Total
-# X5 = Ingresos Totales / Activo Total
+# Function: calcular_ratios_zlogit
+# Purpose:
+# Calculate the five Z-Logit ratios (X1-X5) from financial columns.
 # --------------------------------------------------------
 
 def calcular_ratios_zlogit(df):
+    """
+    Calculate Z-Logit ratios X1-X5 from financial columns.
+
+    Parameters:
+        df (pd.DataFrame): DataFrame with financial columns.
+
+    Returns:
+        pd.DataFrame: DataFrame with new X1-X5 columns.
+    """
     df = df.copy()
-    eps = 1e-6  # Para evitar división entre cero
+    eps = 1e-6
 
-    # X1: Working Capital / Total Assets
     df["X1"] = (df["IQ_TOTAL_CA"] - df["IQ_TOTAL_CL"]) / (df["IQ_TOTAL_ASSETS"] + eps)
-
-    # X2: Retained Earnings / Total Assets
     df["X2"] = df["IQ_RETAINED_EARNINGS"] / (df["IQ_TOTAL_ASSETS"] + eps)
-
-    # X3: EBIT / Total Assets
     df["X3"] = df["IQ_EBIT"] / (df["IQ_TOTAL_ASSETS"] + eps)
-
-    # X4: Market Value of Equity / Total Liabilities
     df["MARKET_VALUE_EQUITY"] = df["SP_PRICE_CLOSE"] * df["IQ_AVG_BASIC_SHARES_OUT"]
     df["X4"] = df["MARKET_VALUE_EQUITY"] / (df["IQ_TOTAL_LIAB"] + eps)
-
-    # X5: Revenue / Total Assets
     df["X5"] = df["IQ_TOTAL_REV"] / (df["IQ_TOTAL_ASSETS"] + eps)
 
     return df
 
 # --------------------------------------------------------
-# Función: winsorize_iqr
-# Objetivo: Aplicar winsorización a una columna numérica 
-# según el método del rango intercuartílico (IQR) con k=2.5.
-# Esto limita valores extremos para evitar distorsión 
-# en el modelo sin eliminar observaciones.
+# Function: winsorize_iqr
+# Purpose:
+# Winsorize a numeric column based on IQR (k=2.5 by default).
 # --------------------------------------------------------
 
 def winsorize_iqr(df, col, k=2.5):
     """
-    Winsoriza los valores de una columna numérica según el método IQR:
-    - Límite inferior = Q1 - k * IQR
-    - Límite superior = Q3 + k * IQR
-    Reemplaza valores fuera de esos límites con los límites mismos.
+    Winsorize a column using IQR.
+
+    Parameters:
+        df (pd.DataFrame): DataFrame.
+        col (str): Column to winsorize.
+        k (float): Multiplier for IQR (default 2.5).
+
+    Returns:
+        pd.DataFrame: DataFrame with winsorized column.
     """
     q1 = df[col].quantile(0.25)
     q3 = df[col].quantile(0.75)
@@ -230,46 +268,50 @@ def winsorize_iqr(df, col, k=2.5):
     lower = q1 - k * iqr
     upper = q3 + k * iqr
     df[col] = df[col].clip(lower, upper)
-    print(f"{col}: Winsorizado entre {lower:.3f} y {upper:.3f}")
+    print(f"{col}: Winsorized between {lower:.3f} and {upper:.3f}")
     return df
 
 # --------------------------------------------------------
-# Función: winsorize_percentiles
-# Objetivo: Aplicar winsorización a una columna numérica
-# entre percentiles específicos (por defecto 1% y 99%). 
-# Ideal para variables con alta asimetría como X4.
+# Function: winsorize_percentiles
+# Purpose:
+# Winsorize a numeric column between specific percentiles (default 1%–99%).
 # --------------------------------------------------------
 
 def winsorize_percentiles(df, col, lower_pct=0.01, upper_pct=0.99):
+    """
+    Winsorize a column using lower and upper percentiles.
+
+    Parameters:
+        df (pd.DataFrame): DataFrame.
+        col (str): Column to winsorize.
+        lower_pct (float): Lower percentile (default 0.01).
+        upper_pct (float): Upper percentile (default 0.99).
+
+    Returns:
+        pd.DataFrame: DataFrame with winsorized column.
+    """
     lower = df[col].quantile(lower_pct)
     upper = df[col].quantile(upper_pct)
     df.loc[:, col] = df[col].clip(lower, upper)
-    print(f"{col}: Winsorizado entre p{int(lower_pct*100)} = {lower:.3f} y p{int(upper_pct*100)} = {upper:.3f}")
+    print(f"{col}: Winsorized between p{int(lower_pct*100)} = {lower:.3f} and p{int(upper_pct*100)} = {upper:.3f}")
     return df
 
 # --------------------------------------------------------
-# Función: calcular_is_distressed
-# Objetivo: Generar una variable binaria que actúe como 
-# proxy de quiebra financiera ('is_distressed'), con base 
-# en múltiples señales contables y financieras graves.
-# Se clasifica como 'distressed' si cumple ≥ 2 criterios.
+# Function: calcular_is_distressed
+# Purpose:
+# Build a binary variable proxy for financial distress (>=2 severe signs).
 # --------------------------------------------------------
 
 def calcular_is_distressed(df):
     """
-    Calcula una variable binaria proxy de distress financiero (1 = empresa en problemas) usando señales contables.
+    Create a binary proxy for financial distress (>=2 severe accounting signs).
 
-    Reglas:
-    - Patrimonio neto negativo
-    - EBIT / Activos < -0.5
-    - Retained Earnings / Activos < -1
-    - Capital de trabajo / Activos < -0.2
-    - Deuda total / Activos > 1
-    - Intereses > EBIT (si EBIT < 0)
+    Parameters:
+        df (pd.DataFrame): DataFrame with required columns.
 
-    Devuelve una columna nueva: is_distressed (0 o 1).
+    Returns:
+        pd.Series: Binary column is_distressed (0 or 1).
     """
-
     score = 0
     score += (df["IQ_TOTAL_LIAB"] > df["IQ_TOTAL_ASSETS"]).astype(int)
     score += (df["IQ_EBIT"] / df["IQ_TOTAL_ASSETS"] < -0.5).astype(int)
@@ -277,5 +319,70 @@ def calcular_is_distressed(df):
     score += ((df["IQ_TOTAL_CA"] - df["IQ_TOTAL_CL"]) / df["IQ_TOTAL_ASSETS"] < -0.2).astype(int)
     score += (df["IQ_TOTAL_DEBT"] / df["IQ_TOTAL_ASSETS"] > 1.0).astype(int)
     score += ((df["IQ_INTEREST_EXP"] > df["IQ_EBIT"]) & (df["IQ_EBIT"] < 0)).astype(int)
-
     return (score >= 2).astype(int)
+
+# --------------------------------------------------------
+# Función: categorizar_riesgo_sector
+# Objetivo: Generar una categoría de riesgo relativa
+# ("Bajo riesgo", "Medio riesgo", "Alto riesgo") para cada
+# empresa, comparando su probabilidad de distress individual
+# (proba_distress) contra los percentiles internos
+# (Mediana y P90) de su propio sector o segmento. Esto
+# permite evaluar el riesgo en contexto, no absoluto.
+# --------------------------------------------------------
+
+def categorizar_riesgo_sector(row):
+    """
+    Categorize relative risk within industry using industry percentiles.
+    Returns: "Low risk", "Medium risk", "High risk" (in English for consistency).
+    """
+    try:
+        median = row["Median"]
+        p90 = row["P90"]
+        prob = row["proba_distress"]
+        if pd.isna(median) or pd.isna(p90) or pd.isna(prob):
+            return np.nan
+        if prob < median:
+            return "Low risk"
+        elif prob < p90:
+            return "Medium risk"
+        else:
+            return "High risk"
+    except KeyError:
+        # Si los nombres no existen, deja un mensaje útil para debuggear
+        raise KeyError(f"Column missing in row: {row.index.tolist()}")
+
+# --------------------------------------------------------
+# Función: rating_altman
+# Objetivo:
+# Asigna un "rating crediticio" estimado según la probabilidad de distress,
+# usando cortes basados en Altman (2016) y Damodaran.
+# Devuelve escalas: "AAA/AA", "A", "BBB", "BB", "B", "CCC/D".
+# --------------------------------------------------------
+
+def rating_altman(prob):
+    """
+    Assign an estimated credit rating based on Altman/Damodaran probability thresholds.
+
+    Parameters:
+        prob (float): Estimated distress probability.
+
+    Returns:
+        str: Estimated credit rating ("AAA/AA", "A", "BBB", "BB", "B", "CCC/D") or np.nan if input missing.
+    """
+    if pd.isna(prob):
+        return np.nan
+    if prob < 0.02:
+        return "AAA/AA"
+    elif prob < 0.04:
+        return "A"
+    elif prob < 0.08:
+        return "BBB"
+    elif prob < 0.14:
+        return "BB"
+    elif prob < 0.25:
+        return "B"
+    else:
+        return "CCC/D"
+
+
