@@ -23,11 +23,11 @@ data/
 original_xlsx/
 *.xlsx
 *.xls
-outputs/*.csv
-outputs/*.pkl
-outputs/figures/
-outputs/*.png
-outputs/*.pdf
+# outputs/*.csv
+# outputs/*.pkl
+# outputs/figures/
+# outputs/*.png
+# outputs/*.pdf
 
 # Sensitive information
 *.env
