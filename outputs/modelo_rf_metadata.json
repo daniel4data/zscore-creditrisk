@@ -1,0 +1,19 @@
+{
+  "model": "RandomForestClassifier",
+  "features": [
+    "X1",
+    "X2",
+    "X3",
+    "X4"
+  ],
+  "threshold": 0.6499999999999997,
+  "feature_importance": {
+    "X1": 0.152705,
+    "X2": 0.512067,
+    "X3": 0.211672,
+    "X4": 0.123555
+  },
+  "auc_test": 0.9454675988272094,
+  "f1_test": 0.6293706293706294,
+  "n_test": 8967
+}
