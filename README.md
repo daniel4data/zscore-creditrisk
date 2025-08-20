@@ -96,9 +96,6 @@ zscore-creditrisk/
 
 ---
 
-
----
-
 ## 📈 Outputs principales
 
 | Archivo                              | Descripción                                                                 |
@@ -116,8 +113,13 @@ zscore-creditrisk/
 
 | Modelo          | F1 Score (1) | AUC ROC | Threshold óptimo |
 |-----------------|--------------|---------|------------------|
-| Z-Logit         | ≈ 0.63       | ≈ 0.66  | ≈ 0.55           |
-| Random Forest   | ≈ 0.63       | ≈ 0.66  | ≈ 0.65           |
+| Z-Logit         | 0.582        | 0.905   | 0.635            |
+| Random Forest   | 0.629        | 0.945   | 0.650            |
+
+🔎 **Conclusión**:
+- Ambos modelos ofrecen buenos resultados para predecir distress financiero.
+- **Random Forest** presenta mejor desempeño general (F1 y AUC).
+- **Z-Logit** sigue siendo útil por su interpretabilidad y solidez estadística.
 
 ---
 
